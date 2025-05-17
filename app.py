@@ -30,7 +30,7 @@ if uploaded_pdf:
         f.write(uploaded_pdf.getbuffer())
 
     # 4. Load or Build Index after file upload
-    with st.spinner("🔄 Loading or building index..."):
+    with st.spinner("🔄 Loading , Please wait..."):
         embedder, texts, index = build_or_load_index(pdf_path)
 
     # 5. Initialize Chat History
