@@ -18,9 +18,9 @@ except KeyError:
     st.error("🔑 GROQ API key not found in Streamlit secrets. Please add it under [GROQ] API_KEY.")
     st.stop()
 
-# 3. Sidebar: PDF Upload + Debug Option + Clear Chat
+# 3. Sidebar: PDF Upload + Debug + Clear
 st.sidebar.header("PDF & Settings")
-uploaded_pdf = st.sidebar.file_uploader("Upload PDF", type=["pdf"] )
+uploaded_pdf = st.sidebar.file_uploader("Upload PDF", type=["pdf"])
 show_context = st.sidebar.checkbox("Show Retrieved Contexts")
 if st.sidebar.button("Clear Conversation"):
     st.session_state.chat_history = []
@@ -60,18 +60,28 @@ if uploaded_pdf:
 
     # 10. Chat input
     if prompt := st.chat_input("Type your question..."):
+        # Display user message immediately
+        st.session_state.chat_history.append(HumanMessage(content=prompt))
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Retrieve relevant contexts
         contexts = query_faiss_index(prompt, embedder, index, texts)
         if show_context:
             display_contexts(contexts)
+
+        # Get assistant response
         answer = get_llm_response(
             api_key=GROQ_API_KEY,
             query=prompt,
             contexts=contexts,
             chat_history=st.session_state.chat_history
         )
-        st.session_state.chat_history.append(HumanMessage(content=prompt))
+
+        # Append and display assistant message
         st.session_state.chat_history.append(AIMessage(content=answer))
         with st.chat_message("assistant"):
             st.markdown(answer)
+
 else:
     st.info("📄 Please upload a PDF file to start the conversation.")
