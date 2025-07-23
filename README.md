@@ -1,123 +1,164 @@
-# Conversational PDF QA Agent
+# 🤖 Conversational PDF QA Agent
 
-A Streamlit-powered web application that lets you upload any PDF document and interactively ask questions about its content. Under the hood, it leverages:
+A Streamlit-powered web application that lets you upload any PDF document and interactively ask questions about its content. Turn dense documents into dynamic conversations.
 
-- **LangChain** for prompt management and conversational context handling.
-- **FAISS** (via Facebook AI Similarity Search) for fast retrieval of relevant text chunks.
-- **SentenceTransformers** for embedding computation (`all-MiniLM-L6-v2` model).
-- **ChatGroq** (GROQ API) for LLM-powered question answering in a conversational context.
+### 🚀 [**Live Demo**](https://pdf-ai-agent.streamlit.app/)
 
----
+*(Note: The live demo is on a free service and may take 15-20 seconds to wake up on the first visit.)*
 
-## 🚀 Features
 
-- **Upload & Chat**: Simply drag-and-drop a PDF and start asking questions in natural language.
-- **Context Retrieval**: Retrieves the top-𝑘 most relevant chunks from the PDF using FAISS-based vector similarity.
-- **Conversational Memory**: Maintains chat history for follow-up questions.
-- **Debug Mode**: Toggle “Show Retrieved Contexts” to inspect which passages informed the answers.
-- **Caching**: Index and embeddings are cached per-PDF to speed up subsequent queries.
-- **Lightweight & Extensible**: Minimal codebase, easy to swap models or vector backends.
+## ✨ Features
 
----
+* **📄 Upload & Chat**: Simply drag-and-drop any PDF and start asking questions in natural language.
 
-## 📦 Installation
+* **🧠 Context-Aware Retrieval**: Uses FAISS vector search to instantly find the most relevant information to answer your questions.
+
+* **💬 Conversational Memory**: Remembers your chat history for seamless follow-up questions and context-aware conversations.
+
+* **🔍 Inspectable Context**: A "Show Retrieved Contexts" toggle lets you see exactly which parts of the document the AI used to form its answer.
+
+* **⚡ Blazing Fast & Efficient**: Caches indexes and embeddings for each PDF, making subsequent conversations instantaneous.
+
+* **🔧 Extensible by Design**: Built with a minimal codebase that makes it easy to swap out embedding models, LLMs, or vector backends.
+
+## 🏗️ System Architecture
+
+This project is built using a **Retrieval-Augmented Generation (RAG)** architecture to ensure that answers are grounded in the content of the provided document.
+
+```mermaid
+flowchart LR
+    classDef userAction fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#1976d2,font-weight:bold
+    classDef systemProcess fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#388e3c
+    classDef dataStore fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#f57c00,shape:cylinder
+    classDef llm fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px,color:#8e24aa
+    classDef prompt fill:#ede7f6,stroke:#5e35b1,stroke-width:2px,color:#5e35b1,shape:parallelogram
+    classDef phaseTitle fill:none,stroke:none,color:#FFF,font-weight:bold,font-size:20px
+
+    subgraph Phase 1
+        direction TB
+        Title1["Ingestion & Vectorization"]:::phaseTitle
+        A["fa:fa-file-upload You upload PDF via Streamlit UI"]:::userAction
+        B["fa:fa-cogs Text extracted via PyPDFLoader"]:::systemProcess
+        C["fa:fa-cut Text chunked via RecursiveCharacterTextSplitter"]:::systemProcess
+        D["fa:fa-brain Chunks embedded via SentenceTransformer"]:::systemProcess
+        E["fa:fa-database Embeddings saved to FAISS"]:::dataStore
+        Title1 ~~~ A --> B --> C --> D --> E
+    end
+
+    subgraph Phase 2
+        direction TB
+        Title2["Retrieval & Augmentation"]:::phaseTitle
+        F["fa:fa-question-circle You ask a question in UI"]:::userAction
+        G["fa:fa-brain Question embedded via SentenceTransformer"]:::systemProcess
+        H["fa:fa-search FAISS search for top-K chunks"]:::systemProcess
+        I["fa:fa-file-alt LLM prompt built by LangChain"]:::prompt
+        Title2 ~~~ F --> G --> H --> I
+    end
+
+    subgraph Phase 3
+        direction TB
+        Title3["Response Generation"]:::phaseTitle
+        J["fa:fa-robot API call to ChatGroq LLM (llama3‑8b)"]:::llm
+        K["fa:fa-lightbulb-on Answer content received from LLM"]:::llm
+        L["fa:fa-desktop Answer rendered in Streamlit UI"]:::userAction
+        Title3 ~~~ J --> K --> L
+    end
+
+    E -- "Vector Store Ready" --> F
+    I -- "Augmented Prompt" --> J
+
+```
+
+## 🛠️ Tech Stack
+
+* **Framework**: Streamlit
+
+* **AI Orchestration**: LangChain
+
+* **LLM**: Llama 3 (via ChatGroq API)
+
+* **Embedding Model**: `all-MiniLM-L6-v2` (via SentenceTransformers)
+
+* **Vector Store**: FAISS (Facebook AI Similarity Search)
+
+* **PDF Processing**: PyPDFLoader
+
+## 📦 Installation & Setup
+
+Get your own local copy up and running in a few simple steps.
 
 1. **Clone the repository**
+
    ```bash
-   git clone https://github.com/dubeyrudra-1808/PDF_AGENT.git
+   git clone [https://github.com/dubeyrudra-1808/PDF_AGENT.git](https://github.com/dubeyrudra-1808/PDF_AGENT.git)
    cd PDF_AGENT
    ```
 
-2. **Create & activate a Python environment**
+2. **Create and activate a virtual environment**
+
    ```bash
+   # For macOS/Linux
    python3 -m venv .venv
-   source .venv/bin/activate   # macOS/Linux
-   .\.venv\Scripts\activate  # Windows
+   source .venv/bin/activate
+   
+   # For Windows
+   python -m venv .venv
+   .\.venv\Scripts\activate
    ```
 
 3. **Install dependencies**
+
    ```bash
    pip install -r requirements.txt
    ```
 
 4. **Set up environment variables**
-   - Copy `.env.example` to `.env` (if provided) or create a `.env` file at the project root.
-   - Add your GROQ API key under the `[GROQ]` section:
+
+   * Create a file named `.env` in the root of the project.
+
+   * Add your Groq API key to this file:
+
      ```ini
      [GROQ]
-     API_KEY=your_groq_api_key_here
+     API_KEY="gsk_your_groq_api_key_here"
      ```
-
----
-
-## 🏗 Architecture & Code Overview
-
-```
-PDF_AGENT/
-├─ streamlit_app.py        # Main Streamlit application
-├─ pdf_qa_backend.py       # Core logic: loading, chunking, indexing, querying
-├─ requirements.txt        # Python dependencies
-├─ .env                    # Environment variables (GROQ API key)
-├─ pdfs/                   # Uploaded PDFs (created at runtime)
-└─ vector_store/           # Cached embeddings and FAISS indexes
-```
-
-1. **streamlit_app.py**
-   - Sets up a wide-layout Streamlit app.
-   - Loads the GROQ API key from `st.secrets` or `.env`.
-   - Handles PDF upload, caching of FAISS index via `@st.cache_resource`.
-   - Renders chat history, debug contexts, and input box.
-
-2. **pdf_qa_backend.py**
-   - **Loading & Chunking**: Uses `PyPDFLoader` and `RecursiveCharacterTextSplitter` to break PDFs into overlapping chunks.
-   - **Indexing** (`build_or_load_index`): Computes or loads embeddings (NumPy+FAISS), normalizes, and persists files under `vector_store/`.
-   - **Querying** (`query_faiss_index`): Encodes user queries, finds top-𝑘 similar chunks.
-   - **LLM Invocation** (`get_llm_response`): Constructs a system prompt, appends chat history, injects retrieved contexts, and calls GROQ’s `ChatGroq`.
-
----
 
 ## 🎯 Usage
 
-1. **Run the app**
+1. **Run the Streamlit app**
+
    ```bash
    streamlit run streamlit_app.py
    ```
 
-2. **Open in browser**
-   - By default: http://localhost:8501
+2. **Open in your browser**
 
-3. **Interact**
-   - Upload your PDF.
-   - Ask questions in the chat interface.
-   - Optionally toggle **Show Retrieved Contexts** to debug.
+   * Navigate to `http://localhost:8501`.
 
----
+3. **Start Chatting!**
 
-## 🔧 Configuration
+   * Drag and drop your PDF into the uploader.
 
-- **Embedding Model**: Change `EMBED_MODEL` (`all-MiniLM-L6-v2`) in `pdf_qa_backend.py` to another `sentence-transformers` model.
-- **FAISS Metric**: Adjust `FAISS_METRIC` for inner-product or L2.
-- **Chunk Size & Overlap**: Tune `chunk_size` and `chunk_overlap` in `load_pdf_and_chunks`.
+   * Wait for the initial processing to complete.
 
----
+   * Ask questions in the chat interface and get instant, context-aware answers.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Feel free to open issues or pull requests for bug fixes, enhancements, or new features.
+Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
 
-1. Fork the repo.
-2. Create a feature branch: `git checkout -b feat/my-new-feature`.
-3. Commit your changes: `git commit -m "feat: add awesome feature"`.
-4. Push to the branch: `git push origin feat/my-new-feature`.
-5. Open a pull request.
+1. Fork the Project
 
----
+2. Create your Feature Branch (`git checkout -b feat/AmazingFeature`)
+
+3. Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
+
+4. Push to the Branch (`git push origin feat/AmazingFeature`)
+
+5. Open a Pull Request
 
 ## 📝 License
 
-This project is licensed under the MIT License. See `LICENSE` for more details.
+Distributed under the MIT License. See `LICENSE` for more information.
 
----
-
-_Developed with ❤️ by dubeyrudra-1808._
-
+*Developed with ❤️ by Rudra Dubey.*
