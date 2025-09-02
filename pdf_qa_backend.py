@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import time
 import traceback
 from dotenv import load_dotenv
@@ -24,7 +25,6 @@ PDF_PATH = "pdfs/fine_tuning.pdf"
 VECTOR_DIR = "vector_store"
 EMBED_MODEL = "all-MiniLM-L6-v2"
 # We'll use Inner Product on normalized vectors to get cosine similarity
-# Use IndexFlatIP(dim) for inner product.
 DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_FALLBACKS = [
     DEFAULT_GROQ_MODEL,
@@ -146,7 +146,7 @@ def query_faiss_index(query: str, embedder: SentenceTransformer, index: faiss.In
 
 def initialize_groq_client(api_key: str, fallbacks: List[str]) -> ChatGroq:
     if not api_key:
-        raise ValueError("GROQ_API_KEY is required (set it in your .env).")
+        raise ValueError("GROQ_API_KEY is required (set it in your .env or Streamlit secrets).")
 
     last_err = None
     for candidate in fallbacks:
@@ -168,9 +168,49 @@ def initialize_groq_client(api_key: str, fallbacks: List[str]) -> ChatGroq:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Build prompt and call LLM
+#    (Updated: accepts either `llm` OR `api_key` to build an LLM inside)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_llm_response(llm: ChatGroq, query: str, contexts: List[str], chat_history: Optional[List] = None) -> str:
+def get_llm_response(
+    query: str,
+    contexts: List[str],
+    chat_history: Optional[List] = None,
+    *,
+    llm: Optional[ChatGroq] = None,
+    api_key: Optional[str] = None,
+    model_fallbacks: Optional[List[str]] = None,
+) -> str:
+    """
+    Get an LLM response. Caller can either:
+      - Pass an initialized `llm=ChatGroq(...)`, or
+      - Pass `api_key="..."` (or rely on env / streamlit secrets) and let the function initialize the LLM.
+
+    This signature is compatible with:
+      get_llm_response(query, contexts, llm=my_llm)
+    or
+      get_llm_response(query, contexts, api_key="...", ...)
+
+    Returns the assistant response content (string).
+    """
+    # Prefer provided llm
+    if llm is None:
+        # Determine API key: explicit arg -> env -> streamlit secrets (if available)
+        used_key = api_key or os.getenv("GROQ_API_KEY")
+        if not used_key and "streamlit" in sys.modules:
+            # If the caller is running within Streamlit, attempt to read secrets
+            try:
+                import streamlit as st  # type: ignore
+                used_key = st.secrets["GROQ"]["API_KEY"]
+            except Exception:
+                used_key = None
+
+        if not used_key:
+            raise RuntimeError("GROQ API key not found. Provide api_key= or set GROQ_API_KEY or Streamlit secrets.")
+
+        # Use provided fallbacks or module-level list
+        fallbacks = model_fallbacks if model_fallbacks is not None else GROQ_FALLBACKS
+        llm = initialize_groq_client(used_key, fallbacks)
+
     system_msg = SystemMessage(
         content=(
             "You are a helpful assistant. "
@@ -201,13 +241,15 @@ def get_llm_response(llm: ChatGroq, query: str, contexts: List[str], chat_histor
     return response.content
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main interactive agent
+# Main interactive agent (kept for CLI use)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key:
-        raise RuntimeError("GROQ_API_KEY missing. Add it to your .env file.")
+        # If running under Streamlit and GROQ key is in secrets, main() will still fail,
+        # because CLI uses .env. This is expected for CLI mode.
+        raise RuntimeError("GROQ_API_KEY missing. Add it to your .env file or call get_llm_response with api_key in Streamlit.")
 
     # Initialize Groq client (tries fallbacks)
     llm = initialize_groq_client(groq_api_key, GROQ_FALLBACKS)
@@ -237,7 +279,7 @@ def main():
             contexts = []
 
         try:
-            answer = get_llm_response(llm, query, contexts)
+            answer = get_llm_response(query=query, contexts=contexts, llm=llm)
         except Exception:
             print("⚠️ LLM failed to produce an answer. Consider checking GROQ_MODEL or your API key.")
             continue

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import time
 import traceback
@@ -16,12 +17,22 @@ from langchain.schema import HumanMessage, SystemMessage
 # 1. Configuration & paths
 # ─────────────────────────────────────────────────────────────────────────────
 
-load_dotenv()  # load GROQ_API_KEY and GROQ_MODEL from .env
+load_dotenv()  # load GROQ_API_KEY and optional GROQ_MODEL from .env
 
 PDF_PATH    = "pdfs/fine_tuning.pdf"
 VECTOR_DIR  = "vector_store"
 EMB_PATH    = os.path.join(VECTOR_DIR, "embeddings.npy")
 IDX_PATH    = os.path.join(VECTOR_DIR, "faiss_index.idx")
+
+EMBED_MODEL = "all-MiniLM-L6-v2"
+
+# Default production-safe model, overridable by environment
+DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL_FALLBACKS = [
+    DEFAULT_GROQ_MODEL,
+    "llama-3-groq-8B-Tool-Use",
+    "llama-3-groq-70B-Tool-Use",
+]
 
 os.makedirs(VECTOR_DIR, exist_ok=True)
 
@@ -30,13 +41,30 @@ os.makedirs(VECTOR_DIR, exist_ok=True)
 # ─────────────────────────────────────────────────────────────────────────────
 
 need_build = True
+embedder = None
+texts = []
+index = None
+embeddings = None
+
 if os.path.exists(EMB_PATH) and os.path.exists(IDX_PATH):
     try:
         print("🔄 Loading embeddings & FAISS index from disk...")
-        embeddings = np.load(EMB_PATH)
+        # load embeddings and cast to float32 for FAISS
+        embeddings = np.load(EMB_PATH).astype("float32")
         index      = faiss.read_index(IDX_PATH)
-        embedder   = SentenceTransformer("all-MiniLM-L6-v2")
+        embedder   = SentenceTransformer(EMBED_MODEL)
+        # load texts for retrieval
+        loader   = PyPDFLoader(PDF_PATH)
+        pages    = loader.load()
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size    = 500,
+            chunk_overlap = 50,
+            separators    = ["\n\n", "\n", " ", ""]
+        )
+        chunks   = splitter.split_documents(pages)
+        texts    = [chunk.page_content for chunk in chunks]
         need_build = False
+        print("✅ Loaded saved embeddings & index.")
     except Exception as e:
         print("⚠️ Failed to load saved index:", e)
         print("→ Will rebuild embeddings & index.")
@@ -45,8 +73,14 @@ if need_build:
     print("🚧 Building embeddings & FAISS index (this runs once)...")
 
     # 2b.1 Load & split PDF
+    if not os.path.exists(PDF_PATH):
+        raise FileNotFoundError(f"PDF not found at '{PDF_PATH}'")
+
     loader   = PyPDFLoader(PDF_PATH)
     pages    = loader.load()
+    if not pages:
+        raise RuntimeError("PDF loaded but contains no pages.")
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size    = 500,
         chunk_overlap = 50,
@@ -56,13 +90,14 @@ if need_build:
     texts    = [chunk.page_content for chunk in chunks]
 
     # 2b.2 Embed all chunks
-    embedder   = SentenceTransformer("all-MiniLM-L6-v2")
+    embedder   = SentenceTransformer(EMBED_MODEL)
     embeddings = embedder.encode(texts, show_progress_bar=True)
+    embeddings = np.asarray(embeddings, dtype="float32")  # required for FAISS
 
-    # 2b.3 Build FAISS index (cosine similarity)
+    # 2b.3 Build FAISS index (cosine via inner product on normalized vectors)
+    faiss.normalize_L2(embeddings)                       # normalize first
     dim   = embeddings.shape[1]
     index = faiss.IndexFlatIP(dim)
-    faiss.normalize_L2(embeddings)
     index.add(embeddings)
 
     # 2b.4 Save to disk
@@ -71,19 +106,22 @@ if need_build:
     print(f"✅ Saved embeddings → {EMB_PATH}")
     print(f"✅ Saved FAISS index → {IDX_PATH}")
 
+# Safety check: ensure embedder/index are present
+if embedder is None or index is None:
+    raise RuntimeError("Embedder or FAISS index wasn't initialized properly.")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. Initialize Groq LLM client (with fallback)
 # ─────────────────────────────────────────────────────────────────────────────
 
 groq_api_key = os.getenv("GROQ_API_KEY")
 if not groq_api_key:
-    raise ValueError("🔑 Please set your GROQ_API_KEY in .env")
-
-MODEL_FALLBACKS = [
-    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),  # default or .env override
-    "llama-3-groq-8B-Tool-Use",
-    "llama-3-groq-70B-Tool-Use",
-]
+    # if you run this in Streamlit, prefer to read st.secrets instead
+    try:
+        import streamlit as st  # type: ignore
+        groq_api_key = st.secrets["GROQ"]["API_KEY"]
+    except Exception:
+        raise ValueError("🔑 Please set your GROQ_API_KEY in .env or Streamlit secrets.")
 
 llm = None
 last_err = None
@@ -110,7 +148,12 @@ if llm is None:
 print("\n🤖 PDF QA Agent ready! Type 'exit' to quit.\n")
 
 while True:
-    query = input("📝 Your question: ").strip()
+    try:
+        query = input("📝 Your question: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n👋 Goodbye!")
+        break
+
     if query.lower() in ("exit", "quit"):
         print("👋 Goodbye!")
         break
@@ -118,21 +161,20 @@ while True:
         continue
 
     # 4a) Embed the query and search FAISS
-    q_emb = embedder.encode([query])
-    faiss.normalize_L2(q_emb)
-    D, I = index.search(q_emb, k=3)
-
-    # 4b) Gather top context chunks
-    if 'texts' not in locals():
-        loader = PyPDFLoader(PDF_PATH)
-        pages  = loader.load()
-        chunks = RecursiveCharacterTextSplitter(
-            chunk_size    = 500,
-            chunk_overlap = 50
-        ).split_documents(pages)
-        texts  = [chunk.page_content for chunk in chunks]
-
-    contexts = [texts[i] for i in I[0]]
+    try:
+        q_emb = embedder.encode([query])
+        q_emb = np.asarray(q_emb, dtype="float32")
+        faiss.normalize_L2(q_emb)
+        # handle case index has 0 vectors
+        if index.ntotal == 0:
+            contexts = []
+        else:
+            D, I = index.search(q_emb, k=min(3, index.ntotal))
+            contexts = [texts[i] for i in I[0] if 0 <= i < len(texts)]
+    except Exception as e:
+        print("⚠️ Error during FAISS search:", e)
+        traceback.print_exception(type(e), e, e.__traceback__)
+        contexts = []
 
     # 4c) Build chat messages
     system_msg = SystemMessage(
