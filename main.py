@@ -1,4 +1,6 @@
 import os
+import time
+import traceback
 from dotenv import load_dotenv
 
 import numpy as np
@@ -8,13 +10,13 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from langchain_groq import ChatGroq
-from langchain.schema import HumanMessage
+from langchain.schema import HumanMessage, SystemMessage
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Configuration & paths
 # ─────────────────────────────────────────────────────────────────────────────
 
-load_dotenv()  # load GROQ_API_KEY from .env
+load_dotenv()  # load GROQ_API_KEY and GROQ_MODEL from .env
 
 PDF_PATH    = "pdfs/fine_tuning.pdf"
 VECTOR_DIR  = "vector_store"
@@ -70,17 +72,36 @@ if need_build:
     print(f"✅ Saved FAISS index → {IDX_PATH}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Initialize Groq LLM client
+# 3. Initialize Groq LLM client (with fallback)
 # ─────────────────────────────────────────────────────────────────────────────
 
 groq_api_key = os.getenv("GROQ_API_KEY")
 if not groq_api_key:
     raise ValueError("🔑 Please set your GROQ_API_KEY in .env")
 
-llm = ChatGroq(
-    model_name = "llama3-8b-8192",  # or your preferred Groq model
-    api_key    = groq_api_key       # ensure the correct parameter name
-)
+MODEL_FALLBACKS = [
+    os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),  # default or .env override
+    "llama-3-groq-8B-Tool-Use",
+    "llama-3-groq-70B-Tool-Use",
+]
+
+llm = None
+last_err = None
+for candidate in MODEL_FALLBACKS:
+    try:
+        print(f"→ Trying Groq model: {candidate}")
+        llm = ChatGroq(model_name=candidate, api_key=groq_api_key)
+        print(f"✅ Initialized Groq model: {candidate}")
+        break
+    except Exception as e:
+        last_err = e
+        print(f"⚠️ Failed to initialize model {candidate}: {e}")
+        time.sleep(0.5)
+
+if llm is None:
+    print("❌ Could not initialize any Groq model.")
+    traceback.print_exception(type(last_err), last_err, last_err.__traceback__)
+    raise RuntimeError("No available Groq models. Update GROQ_MODEL or check your API key/account.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Interactive query loop
@@ -113,12 +134,12 @@ while True:
 
     contexts = [texts[i] for i in I[0]]
 
-    # 4c) Build chat messages for Groq with fallback prompt
-    system_msg = HumanMessage(
+    # 4c) Build chat messages
+    system_msg = SystemMessage(
         content=(
             "You are a helpful assistant. "
-            "If the user’s question relates to the provided context, use that. "
-            "Otherwise, feel free to answer generally as a normal AI assistant."
+            "If the user’s question relates to the provided context, use that context. "
+            "Otherwise, answer generally."
         )
     )
 
@@ -126,11 +147,16 @@ while True:
     for idx, ctx in enumerate(contexts, 1):
         user_content += f"Context {idx}:\n{ctx}\n\n"
     user_content += f"Question: {query}\nAnswer:"
-
     user_msg = HumanMessage(content=user_content)
 
     # 4d) Call Groq LLM with .invoke()
-    response = llm.invoke([system_msg, user_msg])
+    try:
+        response = llm.invoke([system_msg, user_msg])
+    except Exception as e:
+        print("⚠️ LLM invocation failed:", e)
+        traceback.print_exception(type(e), e, e.__traceback__)
+        print("Try setting GROQ_MODEL in .env to a supported model like 'llama-3.3-70b-versatile'.")
+        continue
 
     # 4e) Display the result
     print("\n💡 Answer:\n")
